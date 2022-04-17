@@ -4,8 +4,6 @@ import exceptions.AccessErrorException
 import project.exceptions.ChatNotFoundException
 import project.exceptions.MessageNotFoundException
 import kotlin.collections.ArrayList
-import kotlin.collections.HashMap
-
 
 object ChatService {
     private var listOfChats: MutableList<Chat> = ArrayList()
@@ -21,43 +19,36 @@ object ChatService {
      * @return ID добавленного сообщения.
      */
     fun addMessage(userId: Int, chatId: Int = 0, message: Message): Int {
-        for (chat in listOfChats) {
-            if (chatId == chat.id) {
-                chat.messages.add(
-                    Message(
-                        id = listOfChats.last().messages.last().id + 1,
-                        userId = userId,
-                        text = message.text,
-                        date = message.date
-                    )
+        val targetChat = listOfChats
+            .find { it.id == chatId }
+            ?: if (listOfChats.isEmpty()) {
+                listOfChats.add(
+                    Chat(id = 1, date = message.date)
                 )
-                return chat.messages.last().id
+                listOfChats.last()
+            } else {
+                listOfChats.add(
+                    Chat(id = listOfChats.last().id + 1, date = message.date)
+                )
+                listOfChats.last()
             }
-        }
-        if (listOfChats.isEmpty()) {
-            val newChat = Chat(id = 1, date = message.date)
-            newChat.messages.add(
-                Message(
-                    id = 1,
-                    userId = userId,
-                    text = message.text,
-                    date = message.date
-                )
-            )
-            listOfChats.add(newChat)
-            return newChat.messages.last().id
-        }
-        val newChat = Chat(id = listOfChats.last().id + 1, date = message.date)
-        newChat.messages.add(
+
+        targetChat.messages.add(
             Message(
-                id = listOfChats.last().messages.last().id + 1,
+                id = if (targetChat.id == 1 && targetChat.messages.isEmpty()) {
+                    1
+                } else if (targetChat.messages.isEmpty()) {
+                    listOfChats.last() { it.id == listOfChats.size - 1 }.messages.last().id + 1
+                } else {
+                    listOfChats.last().messages.last().id + 1
+                },
                 userId = userId,
                 text = message.text,
                 date = message.date
             )
         )
-        listOfChats.add(newChat)
-        return newChat.messages.last().id
+
+        return targetChat.messages.last().id
     }
 
     /**
@@ -125,24 +116,35 @@ object ChatService {
      * @throws <ChatNotFoundException> Указанный чат не существует или помечен как удаленный.
      */
     fun getAllMessagesFromChat(chatId: Int): MutableList<Message> {
-        val searchChatById: (Int, MutableList<Chat>) -> Chat = searchChatById@{ id, listOfChats ->
-            for (chat in listOfChats) {
-                if (chat.id == id && !chat.deleted) {
-                    return@searchChatById chat
+        val targetMessages = listOfChats
+            .singleOrNull { it.id == chatId && !it.deleted }
+            .let { it?.messages ?: throw ChatNotFoundException() }
+            .asSequence()
+            .filter { !it.deleted }
+            .ifEmpty { throw MessageNotFoundException() }
+            .toMutableList()
+
+        val updateMessage: (MutableList<Message>, MutableList<Message>) -> MutableList<Message> =
+            { messages, targetMessages ->
+                for ((i, message) in messages.withIndex()) {
+                    for (targetMessage in targetMessages) {
+                        if (message.id == targetMessage.id)
+                            messages[i] = targetMessage
+                    }
                 }
+                messages
             }
-            throw ChatNotFoundException()
-        }
-        val markMessagesAsRead: (MutableList<Message>) -> MutableList<Message> = {
-            for ((i, message) in it.withIndex()) {
-                it[i] = message.copy(unread = false)
+
+        for ((i, chat) in listOfChats.withIndex()) {
+            if (chat.id == chatId && !chat.deleted) {
+                for ((j, targetMessage) in targetMessages.withIndex()) {
+                    targetMessages[j] = targetMessage.copy(unread = false)
+                }
+                listOfChats[i] = chat.copy(messages = updateMessage(chat.messages, targetMessages))
             }
-            it
         }
 
-        return markMessagesAsRead(searchChatById(chatId, listOfChats).messages)
-            .filter { !it.deleted }
-                as MutableList<Message>
+        return targetMessages
     }
 
     /**
@@ -158,48 +160,49 @@ object ChatService {
      * помечено как удаленное.
      */
     fun getSeveralMessagesFromChat(chatId: Int, messageId: Int, numberOfMessages: Int): MutableList<Message> {
-        val searchChatById: (Int, MutableList<Chat>) -> Chat = searchChatById@{ id, listOfChats ->
-            for (chat in listOfChats) {
-                if (chat.id == id && !chat.deleted) {
-                    return@searchChatById chat
-                }
-            }
-            throw ChatNotFoundException()
-        }
-        val markMessagesAsRead: (MutableList<Message>) -> MutableList<Message> = {
-            for ((i, message) in it.withIndex()) {
-                it[i] = message.copy(unread = false)
-            }
-            it
-        }
-        val findMessageIndexById: (MutableList<Message>, Int) -> Int = findMessage@{ listOfMessages, id ->
-            for ((i, message) in listOfMessages.withIndex()) {
-                if (message.id == id && !message.deleted) {
-                    return@findMessage i
-                }
-            }
-            throw MessageNotFoundException()
-        }
 
-        val listOfUndeletedMessages = searchChatById(chatId, listOfChats)
-            .messages
+        val targetMessages = listOfChats
+            .singleOrNull { it.id == chatId && !it.deleted }
+            .let { it?.messages ?: throw ChatNotFoundException() }
+            .asSequence()
             .filter { !it.deleted }
-                as MutableList<Message>
+            .ifEmpty { throw MessageNotFoundException() }
+            .dropWhile { it.id == messageId - 1 }
+            .ifEmpty { throw MessageNotFoundException() }
+            .let {
+                if (it.first().id != messageId) {
+                    throw MessageNotFoundException()
+                } else {
+                    it
+                }
+            }
+            .take(numberOfMessages)
+            .ifEmpty { throw MessageNotFoundException() }
+            .toMutableList()
 
-        val numberOfMessagesWithinBorders = if (
-            (listOfUndeletedMessages.size - findMessageIndexById(listOfUndeletedMessages, messageId)) >= numberOfMessages) {
-            numberOfMessages
-        } else {
-            listOfUndeletedMessages.size - findMessageIndexById(listOfUndeletedMessages, messageId)
+        val updateMessage: (MutableList<Message>, MutableList<Message>) -> MutableList<Message> =
+            { messages, targetMessages ->
+                for ((i, message) in messages.withIndex()) {
+                    for (targetMessage in targetMessages) {
+                        if (message.id == targetMessage.id)
+                            messages[i] = targetMessage
+                    }
+                }
+                messages
+            }
+
+        for ((i, chat) in listOfChats.withIndex()) {
+            if (chat.id == chatId && !chat.deleted) {
+                for ((j, targetMessage) in targetMessages.withIndex()) {
+                    targetMessages[j] = targetMessage.copy(unread = false)
+                }
+                listOfChats[i] = chat.copy(messages = updateMessage(chat.messages, targetMessages))
+            } else {
+                throw ChatNotFoundException()
+            }
         }
 
-        return markMessagesAsRead(
-            listOfUndeletedMessages
-                .subList(
-                    findMessageIndexById(listOfUndeletedMessages, messageId),
-                    findMessageIndexById(listOfUndeletedMessages, messageId) + numberOfMessagesWithinBorders
-                )
-        )
+        return targetMessages
     }
 
     /**
@@ -225,24 +228,23 @@ object ChatService {
      * @throws <ChatNotFoundException> У пользователя нет чатов, либо они помечены как удаленные.
      */
     fun getUserChats(userId: Int): MutableMap<Chat, Message> {
-        val listOfUserChats: MutableMap<Chat, Message> = HashMap()
-        for (chat in listOfChats) {
-            if (!chat.deleted) {
-                for (message in chat.messages) {
-                    if (message.userId == userId && !message.deleted) {
-                        var undeletedMessages: MutableList<Message> = chat.messages
-                        if (chat.messages.last().deleted) {
-                            undeletedMessages = chat.messages.filter { !it.deleted } as MutableList<Message>
-                        }
-                        listOfUserChats[chat] = undeletedMessages.last()
-                        break
-                    }
-                }
+        val listOfUserChats: MutableMap<Chat, Message> = listOfChats
+            .asSequence()
+            .filter { !it.deleted }
+            .ifEmpty { throw ChatNotFoundException() }
+            .filter {
+                it.messages.contains(it.messages.find { message -> message.userId == userId && !message.deleted }
+                    ?: throw ChatNotFoundException())
             }
-        }
-        if (listOfUserChats.isEmpty()) {
-            throw ChatNotFoundException()
-        }
+            .ifEmpty { throw ChatNotFoundException() }
+            .associateWith {
+                it.messages
+                    .filter { message -> !message.deleted }
+                    .ifEmpty { throw ChatNotFoundException() }
+                    .last()
+            }
+            .toMutableMap()
+
         return listOfUserChats
     }
 
@@ -253,23 +255,25 @@ object ChatService {
      * @return Количество чатов с непрочитанными сообщениями.
      */
     fun <Chat> MutableList<Chat>.getUnreadChatsCount(userId: Int): Int {
-        var counter: Int = 0
-        for (chat in listOfChats) {
-            if (chat.deleted) {
-                continue
+        val counter = listOfChats
+            .asSequence()
+            .filter { !it.deleted }
+            .filter {
+                it.messages
+                    .contains(it.messages
+                        .find { message -> message.userId == userId && !message.deleted }
+                        ?: return@filter false
+                    )
             }
-            for (message in chat.messages) {
-                if (message.userId == userId) {
-                    continue
-                }
-                if (message.userId != userId && !message.deleted) {
-                    if (message.unread) {
-                        counter++
-                        break
-                    }
-                }
+            .filter {
+                it.messages
+                    .contains(it.messages
+                        .find { message -> message.userId != userId && !message.deleted && message.unread }
+                        ?: return@filter false
+                    )
             }
-        }
+            .count()
+
         return counter
     }
 
