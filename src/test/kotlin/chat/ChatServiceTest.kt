@@ -4,21 +4,11 @@ import chat.ChatService.getUnreadChatsCount
 import exceptions.AccessErrorException
 import org.junit.After
 import org.junit.Assert.*
-import org.junit.Before
 import org.junit.Test
 import project.exceptions.ChatNotFoundException
 import project.exceptions.MessageNotFoundException
 
 class ChatServiceTest {
-
-    @Before
-    fun setUp() {
-        val user1 = 999
-        val user2 = 111
-        val message1 = Message(text = "Сообщение 1", date = 1649311450)
-        val message2 = Message(text = "Сообщение 2", date = 1649311460)
-        val message3 = Message(text = "Сообщение 3", date = 1649311470)
-    }
 
     @After
     fun reset() {

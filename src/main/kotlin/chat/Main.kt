@@ -1,5 +1,4 @@
 package chat
 
 fun main() {
-
  }
